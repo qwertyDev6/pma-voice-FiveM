@@ -1,0 +1,139 @@
+local wasProximityDisabledFromOverride = false
+disableProximityCycle = false
+local proximityCircle = {
+	radius = 0.0,
+	expiresAt = 0,
+}
+
+CreateThread(function()
+	while true do
+		if proximityCircle.expiresAt > GetGameTimer() then
+			local ped = PlayerPedId()
+			local coords = GetEntityCoords(ped)
+			local pulse = math.sin(GetGameTimer() / 180.0) * 0.08
+			local height = 0.08 + pulse
+
+			DrawMarker(1, coords.x, coords.y, coords.z - 1.0 + height, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+				proximityCircle.radius * 2.0, proximityCircle.radius * 2.0, 0.10, 35, 145, 255, 115,
+				false, false, 2, false, nil, nil, false)
+			DrawMarker(1, coords.x, coords.y, coords.z - 0.94 + height, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+				proximityCircle.radius * 2.0, proximityCircle.radius * 2.0, 0.025, 100, 205, 255, 210,
+				false, false, 2, false, nil, nil, false)
+			Wait(0)
+		else
+			Wait(250)
+		end
+	end
+end)
+
+local function showProximityCircle(radius)
+	proximityCircle.radius = radius
+	proximityCircle.expiresAt = GetGameTimer() + 2800
+end
+
+RegisterCommand('setvoiceintent', function(source, args)
+	if GetConvarInt('voice_allowSetIntent', 1) == 1 then
+		local intent = args[1]
+		if intent == 'speech' then
+			MumbleSetAudioInputIntent(`speech`)
+		elseif intent == 'music' then
+			MumbleSetAudioInputIntent(`music`)
+		end
+		LocalPlayer.state:set('voiceIntent', intent, true)
+	end
+end)
+TriggerEvent('chat:addSuggestion', '/setvoiceintent', 'Sets the players voice intent', {
+	{
+		name = "intent",
+		help = "speech is default and enables noise suppression & high pass filter, music disables both of these."
+	},
+})
+
+-- TODO: Better implementation of this?
+RegisterCommand('vol', function(_, args)
+	if not args[1] then return end
+	setVolume(tonumber(args[1]))
+end)
+TriggerEvent('chat:addSuggestion', '/vol', 'Sets the radio/phone volume', {
+	{ name = "volume", help = "A range between 1-100 on how loud you want them to be" },
+})
+
+exports('setAllowProximityCycleState', function(state)
+	type_check({ state, "boolean" })
+	disableProximityCycle = state
+end)
+
+function setProximityState(proximityRange, isCustom)
+	local voiceModeData = Cfg.voiceModes[mode]
+	MumbleSetTalkerProximity(proximityRange + 0.0)
+	showProximityCircle(proximityRange + 0.0)
+	LocalPlayer.state:set('proximity', {
+		index = mode,
+		distance = proximityRange,
+		mode = isCustom and "Custom" or voiceModeData[2],
+	}, true)
+	sendUIMessage({
+		-- JS expects this value to be - 1, "custom" voice is on the last index
+		voiceMode = isCustom and #Cfg.voiceModes or mode - 1
+	})
+end
+
+exports("overrideProximityRange", function(range, disableCycle)
+	type_check({ range, "number" })
+	setProximityState(range, true)
+	if disableCycle then
+		disableProximityCycle = true
+		wasProximityDisabledFromOverride = true
+	end
+end)
+
+exports("clearProximityOverride", function()
+	local voiceModeData = Cfg.voiceModes[mode]
+	setProximityState(voiceModeData[1], false)
+	if wasProximityDisabledFromOverride then
+		disableProximityCycle = false
+	end
+end)
+
+RegisterCommand('cycleproximity', function()
+	-- Proximity is either disabled, or manually overwritten.
+	if GetConvarInt('voice_enableProximityCycle', 1) ~= 1 or disableProximityCycle then return end
+	local newMode = mode + 1
+
+	-- If we're within the range of our voice modes, allow the increase, otherwise reset to the first state
+	if newMode <= #Cfg.voiceModes then
+		mode = newMode
+	else
+		mode = 1
+	end
+
+	setProximityState(Cfg.voiceModes[mode][1], false)
+	TriggerEvent('pma-voice:setTalkingMode', mode)
+end, false)
+if gameVersion == 'fivem' then
+	RegisterKeyMapping('cycleproximity', 'Cycle Proximity', 'keyboard', GetConvar('voice_defaultCycle', 'F11'))
+end
+
+-- hacky workaround to the fact that you can't bind secondary key mappings to PTT
+if gameVersion == 'fivem' then
+	local isSecondaryPttPressed = false
+
+	RegisterCommand("+secondary_ptt", function()
+		isSecondaryPttPressed = true
+		CreateThread(function()
+			while isSecondaryPttPressed do
+				SetControlNormal(0, 249, 1.0)
+				SetControlNormal(1, 249, 1.0)
+				SetControlNormal(2, 249, 1.0)
+
+				Wait(0)
+			end
+		end)
+	end)
+
+	RegisterCommand("-secondary_ptt", function()
+		isSecondaryPttPressed = false
+	end)
+
+	RegisterKeyMapping('+secondary_ptt', 'A keybind that lets you have a secondary PTT', 'PAD_ANALOGBUTTOn', GetConvar('voice_defaultSecondary', 'LUP_INDEX'))
+end
